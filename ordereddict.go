@@ -89,6 +89,21 @@ func (self *Dict) Delete(key string) {
 	delete(self.store, key)
 }
 
+// Like Set() but does not effect the order.
+func (self *Dict) Update(key string, value interface{}) *Dict {
+	self.Lock()
+	defer self.Unlock()
+
+	_, pres := self.store[key]
+	if pres {
+		self.store[key] = value
+	} else {
+		self.Set(key, value)
+	}
+
+	return self
+}
+
 func (self *Dict) Set(key string, value interface{}) *Dict {
 	self.Lock()
 	defer self.Unlock()
