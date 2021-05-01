@@ -404,11 +404,16 @@ func (self *Dict) MarshalJSON() ([]byte, error) {
 			continue
 		}
 
-		result += string(kEscaped) + ":"
-
 		// add value
 		v := self.store[k]
 
+		// Check for back references and skip them - this is not perfect.
+		subdict, ok := v.(*Dict)
+		if ok && subdict == self {
+			continue
+		}
+
+		result += string(kEscaped) + ":"
 		vBytes, err := json.Marshal(v)
 		if err == nil {
 			result += string(vBytes) + ","
