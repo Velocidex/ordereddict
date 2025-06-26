@@ -69,6 +69,10 @@ func (self *Dict) SetCaseInsensitive() *Dict {
 	defer self.Unlock()
 
 	self.case_map = make(map[string]string)
+	for k := range self.store {
+		self.case_map[strings.ToLower(k)] = k
+	}
+
 	return self
 }
 
