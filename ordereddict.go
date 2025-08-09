@@ -14,22 +14,41 @@ import (
 	"github.com/Velocidex/yaml/v2"
 )
 
+var (
+	// Mark the item as deleted
+	Deleted = 1
+)
+
+type Item struct {
+	Key   string
+	Value interface{}
+}
+
+func (self Item) IsDeleted() bool {
+	return self.Value == &Deleted
+}
+
 // A concerete implementation of a row - similar to Python's
-// OrderedDict.  Main difference is that delete is not implemented -
-// we just preserve the order of insertions.
+// OrderedDict.  Main difference is that delete is implemented by
+// recording a deletion - this means it is slightly less memory
+// efficient to delete as we expect deletes to be relatively rare.
 type Dict struct {
 	sync.Mutex
 
-	store    map[string]interface{}
-	keys     []string
-	case_map map[string]string
+	items []Item
 
+	// Map key -> item index
+	store map[string]int
+
+	case_insensitive bool
+
+	// Used in Get() when we fail to match
 	default_value interface{}
 }
 
 func NewDict() *Dict {
 	return &Dict{
-		store: make(map[string]interface{}),
+		store: make(map[string]int),
 	}
 }
 
@@ -37,15 +56,19 @@ func (self *Dict) IsCaseInsensitive() bool {
 	self.Lock()
 	defer self.Unlock()
 
-	return self.case_map != nil
+	return self.case_insensitive
+}
+
+func (self *Dict) getKey(key string) string {
+	if self.case_insensitive {
+		return strings.ToLower(key)
+	}
+	return key
 }
 
 func (self *Dict) MergeFrom(other *Dict) {
-	for _, key := range other.keys {
-		value, pres := other.Get(key)
-		if pres {
-			self.Set(key, value)
-		}
+	for _, item := range other.Items() {
+		self.Set(item.Key, item.Value)
 	}
 }
 
@@ -65,36 +88,33 @@ func (self *Dict) GetDefault() interface{} {
 }
 
 func (self *Dict) SetCaseInsensitive() *Dict {
+	res := &Dict{
+		case_insensitive: true,
+		store:            make(map[string]int),
+	}
+
+	for _, item := range self.Items() {
+		if item.IsDeleted() {
+			continue
+		}
+		res.Set(item.Key, item.Value)
+	}
+
+	return res
+}
+
+// Mark the item as deleted - we dont expect this to be too often.
+func (self *Dict) Delete(key string) {
 	self.Lock()
 	defer self.Unlock()
 
-	self.case_map = make(map[string]string)
-	for k := range self.store {
-		self.case_map[strings.ToLower(k)] = k
-	}
+	idx, pres := self.store[self.getKey(key)]
+	if pres {
+		delete(self.store, key)
 
-	return self
-}
-
-func remove(s []string, r string) []string {
-	for i, v := range s {
-		if v == r {
-			return append(s[:i], s[i+1:]...)
-		}
+		// Mark the item as deleted
+		self.items[idx].Value = &Deleted
 	}
-	return s
-}
-
-// Very inefficient but ok for occasional use.
-func (self *Dict) Delete(key string) {
-	new_keys := make([]string, 0, len(self.keys))
-	for _, old_key := range self.keys {
-		if key != old_key {
-			new_keys = append(new_keys, old_key)
-		}
-	}
-	self.keys = new_keys
-	delete(self.store, key)
 }
 
 // Like Set() but does not effect the order.
@@ -102,11 +122,18 @@ func (self *Dict) Update(key string, value interface{}) *Dict {
 	self.Lock()
 	defer self.Unlock()
 
-	_, pres := self.store[key]
+	norm_key := self.getKey(key)
+	idx, pres := self.store[norm_key]
 	if pres {
-		self.store[key] = value
+		self.items[idx].Value = value
+
 	} else {
-		self.set(key, value)
+		self.store[norm_key] = len(self.items)
+		self.items = append(self.items, Item{
+			Key:   key,
+			Value: value,
+		})
+		self.maybeCompact()
 	}
 
 	return self
@@ -119,53 +146,73 @@ func (self *Dict) Set(key string, value interface{}) *Dict {
 	return self.set(key, value)
 }
 
+// Set always updates key order to the end.
 func (self *Dict) set(key string, value interface{}) *Dict {
-	// O(n) but for our use case this is faster since Dicts are
-	// typically small and we rarely overwrite a key.
-	_, pres := self.store[key]
+	norm_key := self.getKey(key)
+
+	// If the item already exists, remove it then insert at the end.
+	idx, pres := self.store[norm_key]
 	if pres {
-		self.keys = append(remove(self.keys, key), key)
-	} else {
-		self.keys = append(self.keys, key)
+		self.items[idx].Value = &Deleted
 	}
 
-	if self.store == nil {
-		self.store = make(map[string]interface{})
-	}
-
-	self.store[key] = value
-
-	if self.case_map != nil {
-		self.case_map[strings.ToLower(key)] = key
-	}
+	self.store[norm_key] = len(self.items)
+	self.items = append(self.items, Item{
+		Key:   key,
+		Value: value,
+	})
+	self.maybeCompact()
 
 	return self
+}
+
+func (self *Dict) maybeCompact() {
+	// Allow the items array have up to 10 deletions before
+	// compaction.
+	if len(self.items)-len(self.store) < 10 {
+		return
+	}
+
+	new_store := make(map[string]int)
+	new_items := []Item{}
+	for _, item := range self.items {
+		if item.IsDeleted() {
+			continue
+		}
+
+		norm_key := self.getKey(item.Key)
+
+		new_store[norm_key] = len(new_items)
+		new_items = append(new_items, Item{
+			Key:   item.Key,
+			Value: item.Value,
+		})
+	}
+
+	self.store = new_store
+	self.items = new_items
 }
 
 func (self *Dict) Len() int {
 	self.Lock()
 	defer self.Unlock()
 
-	return len(self.store)
+	return len(self.items)
 }
 
 func (self *Dict) Get(key string) (interface{}, bool) {
 	self.Lock()
 	defer self.Unlock()
 
-	if self.case_map != nil {
-		real_key, pres := self.case_map[strings.ToLower(key)]
-		if pres {
-			key = real_key
+	idx, pres := self.store[self.getKey(key)]
+	if !pres {
+		if self.default_value != nil {
+			return self.default_value, false
 		}
+		return nil, false
 	}
 
-	val, ok := self.store[key]
-	if !ok && self.default_value != nil {
-		return self.default_value, false
-	}
-
-	return val, ok
+	return self.items[idx].Value, true
 }
 
 func (self *Dict) GetString(key string) (string, bool) {
@@ -257,20 +304,55 @@ func (self *Dict) Keys() []string {
 	self.Lock()
 	defer self.Unlock()
 
-	return self.keys[:]
+	res := make([]string, 0, len(self.items))
+	for _, i := range self.items {
+		if i.IsDeleted() {
+			continue
+		}
+
+		res = append(res, i.Key)
+	}
+
+	return res
 }
 
-func (self *Dict) ToDict() *map[string]interface{} {
+func (self *Dict) Items() []Item {
 	self.Lock()
 	defer self.Unlock()
 
+	res := make([]Item, 0, len(self.items))
+	for _, i := range self.items {
+		if i.IsDeleted() {
+			continue
+		}
+
+		res = append(res, i)
+	}
+
+	return res
+}
+
+func (self *Dict) Value() []interface{} {
+	self.Lock()
+	defer self.Unlock()
+
+	res := make([]interface{}, 0, len(self.items))
+	for _, i := range self.items {
+		if i.IsDeleted() {
+			continue
+		}
+
+		res = append(res, i.Value)
+	}
+
+	return res
+}
+
+func (self *Dict) ToDict() *map[string]interface{} {
 	result := make(map[string]interface{})
 
-	for _, key := range self.keys {
-		value, pres := self.store[key]
-		if pres {
-			result[key] = value
-		}
+	for _, item := range self.Items() {
+		result[item.Key] = item.Value
 	}
 
 	return &result
@@ -364,15 +446,10 @@ func (self *Dict) parseobject(dec *json.Decoder) (err error) {
 		if err != nil {
 			return err
 		}
-		self.keys = append(self.keys, key)
 		if self.store == nil {
-			self.store = make(map[string]interface{})
+			self.store = make(map[string]int)
 		}
-
-		self.store[key] = value
-		if self.case_map != nil {
-			self.case_map[strings.ToLower(key)] = key
-		}
+		self.set(key, value)
 	}
 
 	t, err = dec.Token()
@@ -478,24 +555,18 @@ func handledelim(token json.Token, dec *json.Decoder) (res interface{}, err erro
 
 // Preserve key order when marshalling to JSON.
 func (self *Dict) MarshalJSON() ([]byte, error) {
-	self.Lock()
-	defer self.Unlock()
-
 	buf := &bytes.Buffer{}
 	buf.Write([]byte("{"))
-	for _, k := range self.keys {
+	for _, item := range self.Items() {
 
 		// add key
-		kEscaped, err := json.Marshal(k)
+		kEscaped, err := json.Marshal(item.Key)
 		if err != nil {
 			continue
 		}
 
-		// add value
-		v := self.store[k]
-
 		// Check for back references and skip them - this is not perfect.
-		subdict, ok := v.(*Dict)
+		subdict, ok := item.Value.(*Dict)
 		if ok && subdict == self {
 			continue
 		}
@@ -503,7 +574,7 @@ func (self *Dict) MarshalJSON() ([]byte, error) {
 		buf.Write(kEscaped)
 		buf.Write([]byte(":"))
 
-		vBytes, err := json.Marshal(v)
+		vBytes, err := json.Marshal(item.Value)
 		if err == nil {
 			buf.Write(vBytes)
 			buf.Write([]byte(","))
@@ -511,7 +582,7 @@ func (self *Dict) MarshalJSON() ([]byte, error) {
 			buf.Write([]byte("null,"))
 		}
 	}
-	if len(self.keys) > 0 {
+	if len(self.items) > 0 {
 		buf.Truncate(buf.Len() - 1)
 	}
 	buf.Write([]byte("}"))
@@ -519,14 +590,11 @@ func (self *Dict) MarshalJSON() ([]byte, error) {
 }
 
 func (self *Dict) MarshalYAML() (interface{}, error) {
-	self.Lock()
-	defer self.Unlock()
-
 	result := yaml.MapSlice{}
-	for _, k := range self.keys {
-		v := self.store[k]
+	for _, item := range self.Items() {
 		result = append(result, yaml.MapItem{
-			Key: k, Value: v,
+			Key:   item.Key,
+			Value: item.Value,
 		})
 	}
 

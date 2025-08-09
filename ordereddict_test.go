@@ -133,6 +133,16 @@ func TestOrder(t *testing.T) {
 	assert.Equal(t, []string{"B", "A"}, test.Keys())
 }
 
+func TestDelete(t *testing.T) {
+	test := NewDict().
+		Set("A", 1).
+		Set("B", 2).
+		Set("C", 3)
+	test.Delete("B")
+
+	assert.Equal(t, []string{"A", "C"}, test.Keys())
+}
+
 func TestCaseInsensitive(t *testing.T) {
 	test := NewDict().SetCaseInsensitive()
 
