@@ -91,7 +91,7 @@ func TestDictDeserialization(t *testing.T) {
 		}
 		// Make sure the keys are the same.
 		assert.Equal(t, test.dict.Keys(), value.Keys())
-		assert.Equal(t, test.dict.ToDict(), value.ToDict())
+		assert.Equal(t, test.dict.ToMap(), value.ToMap())
 
 		assert.True(t, reflect.DeepEqual(test.dict, value))
 	}

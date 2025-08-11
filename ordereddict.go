@@ -103,6 +103,17 @@ func (self *Dict) SetCaseInsensitive() *Dict {
 	return res
 }
 
+func (self *Dict) Copy() *Dict {
+	res := NewDict()
+	res.items = append([]Item{}, self.items...)
+	for k, v := range self.store {
+		res.store[k] = v
+	}
+	res.case_insensitive = self.case_insensitive
+	res.default_value = self.default_value
+	return res
+}
+
 // Mark the item as deleted - we dont expect this to be too often.
 func (self *Dict) Delete(key string) {
 	self.Lock()
@@ -332,7 +343,7 @@ func (self *Dict) Items() []Item {
 	return res
 }
 
-func (self *Dict) Value() []interface{} {
+func (self *Dict) Values() []interface{} {
 	self.Lock()
 	defer self.Unlock()
 
@@ -348,14 +359,15 @@ func (self *Dict) Value() []interface{} {
 	return res
 }
 
-func (self *Dict) ToDict() *map[string]interface{} {
+// Convert to Golang native map type (unordered)
+func (self *Dict) ToMap() map[string]interface{} {
 	result := make(map[string]interface{})
 
 	for _, item := range self.Items() {
 		result[item.Key] = item.Value
 	}
 
-	return &result
+	return result
 }
 
 // Printing the dict will always result in a valid JSON document.
