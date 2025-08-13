@@ -141,6 +141,20 @@ func TestDelete(t *testing.T) {
 	test.Delete("B")
 
 	assert.Equal(t, []string{"A", "C"}, test.Keys())
+	assert.Equal(t, 2, test.Len())
+}
+
+func TestDefault(t *testing.T) {
+	test := NewDict().
+		SetDefault("Default").
+		SetCaseInsensitive().
+		Set("A", 1).
+		Set("B", 2).
+		Set("C", 3)
+
+	value, pres := test.Get("a")
+	assert.True(t, pres)
+	assert.Equal(t, 1, value)
 }
 
 func TestCaseInsensitive(t *testing.T) {

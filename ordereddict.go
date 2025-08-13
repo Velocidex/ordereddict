@@ -52,6 +52,11 @@ func NewDict() *Dict {
 	}
 }
 
+func (self *Dict) DebugString() string {
+	return fmt.Sprintf("Keys %v, len(store) %v, case_insensitive %v default_value %v\n",
+		self.Keys(), self.Len(), self.IsCaseInsensitive(), self.GetDefault())
+}
+
 func (self *Dict) IsCaseInsensitive() bool {
 	self.Lock()
 	defer self.Unlock()
@@ -208,7 +213,7 @@ func (self *Dict) Len() int {
 	self.Lock()
 	defer self.Unlock()
 
-	return len(self.items)
+	return len(self.store)
 }
 
 func (self *Dict) Get(key string) (interface{}, bool) {
@@ -311,11 +316,11 @@ func (self *Dict) GetInt64(key string) (int64, bool) {
 	return 0, false
 }
 
-func (self *Dict) Keys() []string {
+func (self *Dict) Keys() (res []string) {
 	self.Lock()
 	defer self.Unlock()
 
-	res := make([]string, 0, len(self.items))
+	res = make([]string, 0, len(self.items))
 	for _, i := range self.items {
 		if i.IsDeleted() {
 			continue
