@@ -75,6 +75,8 @@ func (self *Dict) MergeFrom(other *Dict) {
 	for _, item := range other.Items() {
 		self.Set(item.Key, item.Value)
 	}
+	self.default_value = other.default_value
+	self.case_insensitive = other.case_insensitive
 }
 
 func (self *Dict) SetDefault(value interface{}) *Dict {
@@ -96,6 +98,7 @@ func (self *Dict) SetCaseInsensitive() *Dict {
 	res := &Dict{
 		case_insensitive: true,
 		store:            make(map[string]int),
+		default_value:    self.default_value,
 	}
 
 	for _, item := range self.Items() {
@@ -223,7 +226,7 @@ func (self *Dict) Get(key string) (interface{}, bool) {
 	idx, pres := self.store[self.getKey(key)]
 	if !pres {
 		if self.default_value != nil {
-			return self.default_value, false
+			return self.default_value, true
 		}
 		return nil, false
 	}
