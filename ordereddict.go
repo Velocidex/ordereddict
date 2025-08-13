@@ -226,7 +226,7 @@ func (self *Dict) Get(key string) (interface{}, bool) {
 	idx, pres := self.store[self.getKey(key)]
 	if !pres {
 		if self.default_value != nil {
-			return self.default_value, true
+			return self.default_value, false
 		}
 		return nil, false
 	}
