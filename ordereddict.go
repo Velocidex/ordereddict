@@ -24,7 +24,7 @@ type Item struct {
 	Value interface{}
 }
 
-func (self Item) IsDeleted() bool {
+func (self Item) isDeleted() bool {
 	return self.Value == &Deleted
 }
 
@@ -102,7 +102,7 @@ func (self *Dict) SetCaseInsensitive() *Dict {
 	}
 
 	for _, item := range self.Items() {
-		if item.IsDeleted() {
+		if item.isDeleted() {
 			continue
 		}
 		res.Set(item.Key, item.Value)
@@ -195,7 +195,7 @@ func (self *Dict) maybeCompact() {
 	new_store := make(map[string]int)
 	new_items := []Item{}
 	for _, item := range self.items {
-		if item.IsDeleted() {
+		if item.isDeleted() {
 			continue
 		}
 
@@ -325,7 +325,7 @@ func (self *Dict) Keys() (res []string) {
 
 	res = make([]string, 0, len(self.items))
 	for _, i := range self.items {
-		if i.IsDeleted() {
+		if i.isDeleted() {
 			continue
 		}
 
@@ -341,7 +341,7 @@ func (self *Dict) Items() []Item {
 
 	res := make([]Item, 0, len(self.items))
 	for _, i := range self.items {
-		if i.IsDeleted() {
+		if i.isDeleted() {
 			continue
 		}
 
@@ -357,7 +357,7 @@ func (self *Dict) Values() []interface{} {
 
 	res := make([]interface{}, 0, len(self.items))
 	for _, i := range self.items {
-		if i.IsDeleted() {
+		if i.isDeleted() {
 			continue
 		}
 
