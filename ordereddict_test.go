@@ -144,6 +144,21 @@ func TestDelete(t *testing.T) {
 	assert.Equal(t, 2, test.Len())
 }
 
+func TestAliases(t *testing.T) {
+	test := NewDict().
+		Set("A", 1).
+		Set("B", 2).
+		Set("C", 3)
+	test.AliasField("Foo", "A")
+
+	assert.Equal(t, []string{"A", "B", "C"}, test.Keys())
+	assert.Equal(t, 3, test.Len())
+
+	value, ok := test.Get("Foo")
+	assert.True(t, ok)
+	assert.Equal(t, 1, value)
+}
+
 func TestDefault(t *testing.T) {
 	test := NewDict().
 		SetDefault("Default").

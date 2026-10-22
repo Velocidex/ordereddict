@@ -44,12 +44,30 @@ type Dict struct {
 
 	// Used in Get() when we fail to match
 	default_value interface{}
+
+	// If set, this allows a field to be aliased:
+	// 1. The alias does not show in regular iterations Items() or Keys()
+	// 2. The Get() method will retried the aliased field when the alias is set.
+	aliases map[string]string
 }
 
 func NewDict() *Dict {
 	return &Dict{
 		store: make(map[string]int),
 	}
+}
+
+func (self *Dict) AliasField(src, dest string) *Dict {
+	self.Lock()
+	defer self.Unlock()
+
+	if self.aliases == nil {
+		self.aliases = make(map[string]string)
+	}
+
+	self.aliases[self.getKey(src)] = self.getKey(dest)
+
+	return self
 }
 
 func (self *Dict) DebugString() string {
@@ -223,8 +241,20 @@ func (self *Dict) Get(key string) (interface{}, bool) {
 	self.Lock()
 	defer self.Unlock()
 
-	idx, pres := self.store[self.getKey(key)]
+	store_key := self.getKey(key)
+	idx, pres := self.store[store_key]
 	if !pres {
+		// Is there an alias for this field?
+		if self.aliases != nil {
+			dest, pres := self.aliases[store_key]
+			if pres {
+				idx, pres := self.store[dest]
+				if pres {
+					return self.items[idx].Value, true
+				}
+			}
+		}
+
 		if self.default_value != nil {
 			return self.default_value, false
 		}
