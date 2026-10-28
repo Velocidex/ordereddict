@@ -2,7 +2,9 @@ package ordereddict
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,6 +146,39 @@ func TestDelete(t *testing.T) {
 	assert.Equal(t, 2, test.Len())
 }
 
+func TestDeleteCompactions(t *testing.T) {
+	clearCompactions()
+
+	CompactionThreashold = 10
+	test := NewDict()
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("Key%d", i)
+		test.Set(key, i)
+	}
+	// No compactions when setting fresh keys
+	assert.Equal(t, uint64(0), getCompactions())
+
+	// Setting always reorders the dict, since Set must update the
+	// key's order. This is equivalent to Delete() +
+	// Update(). Repeated setting of the same key will cause a lot of
+	// compactions - consider using Update() instead.
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("Key%d", i)
+		test.Set(key, i)
+	}
+	// Two compactions cycles every 10 keys
+	assert.Equal(t, uint64(2), getCompactions())
+
+	// Deleting keys will also cause compactions
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("Key%d", i)
+		test.Delete(key)
+	}
+
+	// We should rebalance twice - every 10 deletions.
+	assert.Equal(t, uint64(4), getCompactions())
+}
+
 func TestAliases(t *testing.T) {
 	test := NewDict().
 		Set("A", 1).
@@ -184,4 +219,12 @@ func TestCaseInsensitive(t *testing.T) {
 	test = NewDict().Set("FOO", 1)
 	value, pres = test.Get("foo")
 	assert.False(t, pres)
+}
+
+func clearCompactions() {
+	atomic.StoreUint64(&Compactions, 0)
+}
+
+func getCompactions() uint64 {
+	return atomic.LoadUint64(&Compactions)
 }
