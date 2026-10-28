@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Velocidex/json"
@@ -17,6 +18,11 @@ import (
 var (
 	// Mark the item as deleted
 	Deleted = 1
+
+	CompactionThreashold = 10
+
+	// Keep stats about compactions - mostly used for tests
+	Compactions uint64
 )
 
 type Item struct {
@@ -55,6 +61,15 @@ func NewDict() *Dict {
 	return &Dict{
 		store: make(map[string]int),
 	}
+}
+
+// Clear the dict
+func (self *Dict) Clear() {
+	self.Lock()
+	defer self.Unlock()
+
+	self.items = nil
+	self.store = make(map[string]int)
 }
 
 func (self *Dict) AliasField(src, dest string) *Dict {
@@ -151,10 +166,12 @@ func (self *Dict) Delete(key string) {
 
 		// Mark the item as deleted
 		self.items[idx].Value = &Deleted
+		self.maybeCompact()
 	}
 }
 
-// Like Set() but does not effect the order.
+// Like Set() but does not effect the order. This also does not
+// trigger any compactions and is more efficient then Set().
 func (self *Dict) Update(key string, value interface{}) *Dict {
 	self.Lock()
 	defer self.Unlock()
@@ -170,12 +187,17 @@ func (self *Dict) Update(key string, value interface{}) *Dict {
 			Key:   key,
 			Value: value,
 		})
-		self.maybeCompact()
 	}
 
 	return self
 }
 
+// Set inserts the value into the dict.  This function also reorders
+// the dict to make the new key the latest. If the key is already
+// present, this is equivalent to a Delete() on the old key and an
+// Update().  If the caller calls Set repeatadly on the same key this
+// can result in a lot of compactions. In this case consider using
+// Update() instead.
 func (self *Dict) Set(key string, value interface{}) *Dict {
 	self.Lock()
 	defer self.Unlock()
@@ -204,9 +226,9 @@ func (self *Dict) set(key string, value interface{}) *Dict {
 }
 
 func (self *Dict) maybeCompact() {
-	// Allow the items array have up to 10 deletions before
+	// Allow the items array to have up to 10 deletions before
 	// compaction.
-	if len(self.items)-len(self.store) < 10 {
+	if len(self.items)-len(self.store) < CompactionThreashold {
 		return
 	}
 
@@ -228,6 +250,7 @@ func (self *Dict) maybeCompact() {
 
 	self.store = new_store
 	self.items = new_items
+	atomic.AddUint64(&Compactions, 1)
 }
 
 func (self *Dict) Len() int {
@@ -632,7 +655,7 @@ func (self *Dict) MarshalJSON() ([]byte, error) {
 			buf.Write([]byte("null,"))
 		}
 	}
-	if len(self.items) > 0 {
+	if len(self.store) > 0 {
 		buf.Truncate(buf.Len() - 1)
 	}
 	buf.Write([]byte("}"))
