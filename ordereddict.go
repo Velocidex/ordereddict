@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/Velocidex/json"
-	"github.com/Velocidex/yaml/v2"
+	"go.yaml.in/yaml/v4"
 )
 
 var (
@@ -176,6 +176,10 @@ func (self *Dict) Update(key string, value interface{}) *Dict {
 	self.Lock()
 	defer self.Unlock()
 
+	if self.store == nil {
+		self.store = make(map[string]int)
+	}
+
 	norm_key := self.getKey(key)
 	idx, pres := self.store[norm_key]
 	if pres {
@@ -207,6 +211,10 @@ func (self *Dict) Set(key string, value interface{}) *Dict {
 
 // Set always updates key order to the end.
 func (self *Dict) set(key string, value interface{}) *Dict {
+	if self.store == nil {
+		self.store = make(map[string]int)
+	}
+
 	norm_key := self.getKey(key)
 
 	// If the item already exists, remove it then insert at the end.
@@ -444,18 +452,20 @@ func (self *Dict) GoString() string {
 	return self.String()
 }
 
-func (self *Dict) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	m := yaml.MapSlice{}
-	err := unmarshal(&m)
+func (self *Dict) UnmarshalYAML(node *yaml.Node) error {
+	if self == nil {
+		return fmt.Errorf("cannot unmarshal YAML into nil *Dict")
+	}
+	value, err := orderedYAMLValue(node, 0)
 	if err != nil {
 		return err
 	}
-
-	for _, item := range m {
-		key, ok := item.Key.(string)
-		if ok {
-			self.Set(key, item.Value)
-		}
+	dict, ok := value.(*Dict)
+	if !ok {
+		return fmt.Errorf("expected a YAML mapping")
+	}
+	for _, item := range dict.Items() {
+		self.Set(item.Key, item.Value)
 	}
 	return nil
 }
@@ -663,13 +673,120 @@ func (self *Dict) MarshalJSON() ([]byte, error) {
 }
 
 func (self *Dict) MarshalYAML() (interface{}, error) {
-	result := yaml.MapSlice{}
+	if self == nil {
+		return nil, nil
+	}
+	result := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	for _, item := range self.Items() {
-		result = append(result, yaml.MapItem{
-			Key:   item.Key,
-			Value: item.Value,
-		})
+		if subdict, ok := item.Value.(*Dict); ok && subdict == self {
+			return nil, fmt.Errorf("YAML value contains self reference")
+		}
+		key, value := &yaml.Node{}, &yaml.Node{}
+		if err := key.Dump(item.Key, yaml.WithV2Defaults()); err != nil {
+			return nil, err
+		}
+		if err := value.Dump(item.Value, yaml.WithV2Defaults()); err != nil {
+			return nil, err
+		}
+		result.Content = append(result.Content, key, value)
 	}
 
 	return result, nil
+}
+
+// orderedYAMLValue preserves mapping order, including inside sequences, aliases, and merges.
+func orderedYAMLValue(node *yaml.Node, depth int) (interface{}, error) {
+	if node == nil {
+		return nil, nil
+	}
+	if depth > 256 {
+		return nil, fmt.Errorf("YAML value exceeds maximum nesting depth")
+	}
+	switch node.Kind {
+	case yaml.DocumentNode:
+		if len(node.Content) == 0 {
+			return nil, nil
+		}
+		return orderedYAMLValue(node.Content[0], depth+1)
+	case yaml.AliasNode:
+		if node.Alias == nil {
+			return nil, fmt.Errorf("unresolved YAML alias %q", node.Value)
+		}
+		return orderedYAMLValue(node.Alias, depth+1)
+	case yaml.MappingNode:
+		result := NewDict()
+		explicit := make(map[string]bool)
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if k := node.Content[i]; k.Tag == "!!str" {
+				if explicit[k.Value] {
+					return nil, fmt.Errorf("mapping key %q already defined", k.Value)
+				}
+				explicit[k.Value] = true
+			}
+		}
+		merged := make(map[string]bool)
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, val := node.Content[i], node.Content[i+1]
+			if key.Tag == "!!merge" {
+				if err := mergeYAMLNode(result, val, explicit, merged, depth+1); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if key.Tag != "!!str" {
+				continue
+			}
+			v, err := orderedYAMLValue(val, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			result.Set(key.Value, v)
+		}
+		return result, nil
+	case yaml.SequenceNode:
+		result := make([]interface{}, 0, len(node.Content))
+		for _, child := range node.Content {
+			v, err := orderedYAMLValue(child, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, v)
+		}
+		return result, nil
+	default:
+		var result interface{}
+		err := node.Load(&result, yaml.WithV2Defaults())
+		return result, err
+	}
+}
+
+func mergeYAMLNode(dst *Dict, node *yaml.Node, explicit, merged map[string]bool, depth int) error {
+	val, err := orderedYAMLValue(node, depth)
+	if err != nil {
+		return err
+	}
+	add := func(src *Dict) {
+		for _, item := range src.Items() {
+			if !explicit[item.Key] && !merged[item.Key] {
+				merged[item.Key] = true
+				dst.Set(item.Key, item.Value)
+			}
+		}
+	}
+	switch v := val.(type) {
+	case *Dict:
+		add(v)
+		return nil
+	case []interface{}:
+		for _, elem := range v {
+			src, ok := elem.(*Dict)
+			if !ok {
+				return fmt.Errorf("expected a YAML mapping for merge")
+			}
+			add(src)
+		}
+		return nil
+	default:
+		return fmt.Errorf("expected a YAML mapping for merge")
+	}
 }
